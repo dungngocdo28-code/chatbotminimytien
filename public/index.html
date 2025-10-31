@@ -64,7 +64,7 @@ const QUESTIONS = [
   "Cảm ơn bạn vì cuộc trao đổi hôm nay."
 ];
 
-let current = 0, recognition = null, isRunning = false, waitingGoodbye = false, firstGreetingDone = false;
+let current = 0, recognition = null, isRunning = false, waitingGoodbye = false;
 
 const statusEl = document.getElementById('statusText');
 const chatLog = document.getElementById('chatLog');
@@ -76,31 +76,24 @@ function setStatus(t){ statusEl.textContent=t; }
 
 /* ==== AUDIO ==== */
 async function speakServer(msg){
-  try{
-    if (!msg || msg.trim().length < 2) return;
-    if (recognition && isRunning) recognition.stop(); // 🔇 Ngưng nghe khi bot nói
+  return new Promise(async (resolve, reject) => {
+    try{
+      if (!msg || msg.trim().length < 2) return resolve();
 
-    const r = await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:msg})});
-    if(r.status===202){
-      const j=await r.json().catch(()=>null);
-      if(j?.asyncUrl){
-        const audio=new Audio(j.asyncUrl);
+      if (recognition && isRunning) recognition.stop(); // 🔇 tắt mic khi bot nói
+
+      const r = await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:msg})});
+      if(r.ok){
+        const b=await r.blob();
+        const url=URL.createObjectURL(b);
+        const audio=new Audio(url);
         audio.volume=1.0;
-        audio.onended = () => { if (isRunning && recognition) recognition.start(); };
+        audio.onended=()=>{URL.revokeObjectURL(url);resolve();};
+        audio.onerror=()=>resolve();
         await audio.play().catch(()=>setStatus("Nhấn để bật tiếng 🎧"));
-        return;
-      }
-    }
-    if(r.ok){
-      const b=await r.blob();
-      const url=URL.createObjectURL(b);
-      const audio=new Audio(url);
-      audio.volume=1.0;
-      audio.onended = () => {URL.revokeObjectURL(url);if (isRunning && recognition) recognition.start();};
-      await audio.play().catch(()=>setStatus("Nhấn để bật tiếng 🎧"));
-      return;
-    }
-  }catch(e){console.error("💥 Lỗi TTS:",e);}
+      } else resolve();
+    }catch(e){console.error("💥 Lỗi TTS:",e);resolve();}
+  });
 }
 
 /* ==== GPT ==== */
@@ -131,33 +124,26 @@ function initRecognition(){
     setStatus("🧠 Đang tạo phản hồi...");
     playSpeakingAnimation();
 
+    // 👂 1️⃣ Bot nghe xong → phản hồi câu người dùng nói
     const reply=await getGPTReply(userText);
     appendLog("Mỹ Tiên",reply);
-    speakServer(reply); // ✅ Giọng nói cho phản hồi
+    await speakServer(reply);
 
-    if(!firstGreetingDone){
-      firstGreetingDone=true;
-      appendLog("Mỹ Tiên",QUESTIONS[current]);
-      speakServer(QUESTIONS[current]);
-      return;
-    }
+    // 🕒 2️⃣ Dừng 1.2 giây cho tự nhiên
+    await new Promise(res=>setTimeout(res,1200));
 
-    if(waitingGoodbye){
-      appendLog("Mỹ Tiên","Rất vui được trò chuyện cùng bạn. Hẹn gặp lại!");
-      speakServer("Rất vui được trò chuyện cùng bạn. Hẹn gặp lại!");
-      setStatus("✅ Kết thúc phỏng vấn.");
-      isRunning=false; waitingGoodbye=false;
-      return;
-    }
-
+    // 👩‍💼 3️⃣ Sau khi phản hồi xong → đọc câu hỏi tiếp theo
     current++;
     if(current<QUESTIONS.length){
       appendLog("Mỹ Tiên",QUESTIONS[current]);
-      speakServer(QUESTIONS[current]);
-    }else{
-      waitingGoodbye=true;
+      await speakServer(QUESTIONS[current]);
+      // 🔊 Bật mic sau khi đọc xong câu hỏi
+      if(isRunning && recognition) recognition.start();
+    } else {
       appendLog("Mỹ Tiên","Cảm ơn bạn vì cuộc trao đổi hôm nay.");
-      speakServer("Cảm ơn bạn vì cuộc trao đổi hôm nay.");
+      await speakServer("Cảm ơn bạn vì cuộc trao đổi hôm nay.");
+      setStatus("✅ Kết thúc phỏng vấn.");
+      isRunning=false;
     }
   };
   return r;
@@ -166,11 +152,14 @@ function initRecognition(){
 /* ==== START ==== */
 document.getElementById('startBtn').onclick=async()=>{
   if(isRunning)return;
-  isRunning=true;current=0;waitingGoodbye=false;firstGreetingDone=false;chatLog.innerHTML="";
+  isRunning=true;current=0;chatLog.innerHTML="";
   recognition=initRecognition();
   appendLog("Mỹ Tiên","Xin chào, tôi là Mỹ Tiên, phụ trách nhân sự. Rất vui được gặp bạn hôm nay!");
   playSpeakingAnimation();
-  speakServer("Xin chào, tôi là Mỹ Tiên, phụ trách nhân sự. Rất vui được gặp bạn hôm nay!");
+  await speakServer("Xin chào, tôi là Mỹ Tiên, phụ trách nhân sự. Rất vui được gặp bạn hôm nay!");
+  appendLog("Mỹ Tiên",QUESTIONS[current]);
+  await speakServer(QUESTIONS[current]);
+  recognition.start();
 };
 
 document.getElementById('stopBtn').onclick=()=>{if(recognition)recognition.stop();isRunning=false;setStatus("Đã dừng.");};
